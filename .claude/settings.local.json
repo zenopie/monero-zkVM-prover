@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(rustup default:*)",
+      "Bash(rustup update:*)",
+      "Bash(rustc:*)",
+      "Bash(cargo clean:*)",
+      "Bash(export PATH=\"$HOME/.risc0/bin:$PATH\")",
+      "Bash(rzup install:*)",
+      "Bash(cargo update:*)",
+      "Bash(cargo run:*)",
+      "Bash(docker build:*)",
+      "Bash(docker run:*)",
+      "Bash(docker rm:*)",
+      "Bash(docker system prune:*)",
+      "Bash(docker volume prune:*)",
+      "Bash(cargo check:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

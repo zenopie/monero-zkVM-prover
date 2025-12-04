@@ -1,0 +1,158 @@
+# Monero RandomX zkVM Verification - GPU Dockerfile
+#
+# Full RandomX with Argon2d (256 MiB cache) - GPU accelerated
+# Runs automatically on container start, outputs to stdout and /app/benchmark.log
+#
+# Build: docker build -f Dockerfile.gpu -t randomx-zkvm-gpu .
+# Run:   docker run --gpus all randomx-zkvm-gpu
+
+# CUDA 12.x base with Ubuntu 22.04
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    cmake \
+    gcc \
+    g++ \
+    libssl-dev \
+    pkg-config \
+    curl \
+    git \
+    build-essential \
+    ca-certificates \
+    protobuf-compiler \
+    libclang-dev \
+    clang \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash zkvm
+USER zkvm
+WORKDIR /home/zkvm
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/home/zkvm/.cargo/bin:${PATH}"
+
+# Install Risc0 toolchain with CUDA support
+RUN curl -L https://risczero.com/install | bash
+ENV PATH="/home/zkvm/.risc0/bin:${PATH}"
+# Install base toolchain
+RUN /home/zkvm/.risc0/bin/rzup install
+
+# List available rzup components and try installing cuda
+RUN echo "=== Available rzup commands ===" && \
+    /home/zkvm/.risc0/bin/rzup --help && \
+    echo "=== Installed components ===" && \
+    ls -la /home/zkvm/.risc0/
+
+# Set up environment to use Risc0's Rust toolchain (1.91.1)
+ENV PATH="/home/zkvm/.risc0/toolchains/v1.91.1-rust-x86_64-unknown-linux-gnu/bin:/home/zkvm/.risc0/bin:/home/zkvm/.cargo/bin:${PATH}"
+
+# CUDA environment - MUST be set BEFORE cargo build so risc0-zkvm can find CUDA
+ENV PATH=/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+ENV CUDA_HOME=/usr/local/cuda
+ENV NVCC_APPEND_FLAGS="-arch=sm_86"
+
+# Copy project files
+COPY --chown=zkvm:zkvm . /home/zkvm/project
+WORKDIR /home/zkvm/project
+
+# Verify CUDA is accessible during build
+RUN which nvcc && nvcc --version && \
+    echo "CUDA_HOME=$CUDA_HOME" && \
+    ls -la /usr/local/cuda/lib64/ | head -5 && \
+    echo "=== Stub library check ===" && \
+    ls -la /usr/local/cuda/lib64/stubs/ || echo "No stubs dir"
+
+# Build with CUDA feature using stub library for linking
+# The stub libcuda.so allows build without GPU - real lib loaded at runtime
+# Building GPU kernels takes 30-60 minutes
+RUN echo "=== Building with CUDA support (using stub library) ===" && \
+    echo "This will take 30-60 minutes for GPU kernel compilation..." && \
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:$LD_LIBRARY_PATH && \
+    RUSTFLAGS="-C target-cpu=native -L /usr/local/cuda/lib64/stubs" cargo build -F cuda -r -p host 2>&1 | tee /tmp/build.log && \
+    echo "=== Build complete ===" && \
+    echo "Binary will load real libcuda.so at runtime on GPU node" && \
+    ldd /home/zkvm/project/target/release/host | grep -E "cuda|not found" || true && \
+    rm -rf /home/zkvm/.cargo/registry && \
+    rm -rf /home/zkvm/.cargo/git
+
+# Runtime environment
+ENV RISC0_PROVER=local
+ENV RUST_LOG=info,risc0_zkvm=debug,risc0_circuit_rv32im=info,risc0_prover=debug
+ENV RUST_BACKTRACE=full
+
+# Create startup script that shows CLI ready and waits for commands
+COPY --chown=zkvm:zkvm <<EOF /home/zkvm/project/start.sh
+#!/bin/bash
+set -e
+
+echo "============================================================"
+echo "  MONERO RANDOMX ZKVM - GPU PRE-COMPILED"
+echo "============================================================"
+echo ""
+
+# GPU diagnostics
+echo "=== GPU Detection ==="
+if nvidia-smi > /dev/null 2>&1; then
+    nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+else
+    echo "WARNING: No NVIDIA GPU detected!"
+    echo "This image requires --gpus all flag for GPU proving"
+fi
+echo ""
+
+# Check for libcuda.so
+echo "=== CUDA Libraries ==="
+if ldconfig -p | grep -q libcuda; then
+    echo "libcuda.so found"
+else
+    echo "WARNING: libcuda.so not found"
+fi
+echo ""
+
+# Verify binary has CUDA
+BINARY="/home/zkvm/project/target/release/host"
+echo "=== Binary CUDA Check ==="
+if ldd "\$BINARY" 2>/dev/null | grep -q libcuda; then
+    echo "Binary ready with CUDA support"
+else
+    echo "WARNING: Binary may not have CUDA linked (normal if libcuda not in build env)"
+fi
+echo ""
+
+echo "============================================================"
+echo "  PROVER CLI READY"
+echo "============================================================"
+echo ""
+echo "Binary: /home/zkvm/project/target/release/host"
+echo ""
+echo "Usage: /home/zkvm/project/target/release/host [mode] [options]"
+echo ""
+echo "Modes:"
+echo "  cache               Prove full cache (64 segments)"
+echo "  cache-segment N     Prove single cache segment (0-63)"
+echo "  block               Prove full block PoW (8 programs)"
+echo "  block-segment N     Prove single block segment (0-255)"
+echo "  full                Prove cache + block (default)"
+echo ""
+echo "Examples:"
+echo "  /home/zkvm/project/target/release/host cache-segment 5"
+echo "  /home/zkvm/project/target/release/host block-segment 42"
+echo "  /home/zkvm/project/target/release/host --help"
+echo ""
+echo "============================================================"
+echo ""
+
+# Keep container running (for Akash shell access)
+tail -f /dev/null
+EOF
+RUN chmod +x /home/zkvm/project/start.sh
+
+# Start with shell (no auto-proving)
+CMD ["/bin/bash", "/home/zkvm/project/start.sh"]

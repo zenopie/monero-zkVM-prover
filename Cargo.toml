@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = ["host", "methods"]
+
+[workspace.dependencies]
+risc0-zkvm = "3.0"
+risc0-build = "3.0"
+serde = { version = "1.0", features = ["derive"] }
+hex = "0.4"

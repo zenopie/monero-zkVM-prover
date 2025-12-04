@@ -1,0 +1,37 @@
+[package]
+name = "guest"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+# Original combined guest (kept for reference/testing)
+[[bin]]
+name = "guest"
+path = "src/main.rs"
+
+[workspace]
+
+[dependencies]
+risc0-zkvm = { version = "3.0", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+
+# Pure-Rust crypto primitives for RandomX
+# Blake2b is used for key derivation and final hashing
+blake2 = { version = "0.10", default-features = false }
+
+# Argon2d for cache initialization (required for real Monero verification)
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+
+# Pure software IEEE 754 floating point - deterministic across all platforms
+# Uses round-to-nearest-even only (rounding modes ignored for now)
+softfloat = { version = "1", default-features = false }
+
+# NOTE: We implement AES ourselves in randomx/aes.rs
+# The aes crate requires std or has SIMD dependencies
+
+[profile.release]
+# Optimize for speed in the guest (RandomX is computationally intensive)
+opt-level = 3
+lto = true

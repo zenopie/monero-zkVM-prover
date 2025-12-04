@@ -1,0 +1,67 @@
+name: Build and Push GPU Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    tags: "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/hostedtoolcache/go
+          sudo rm -rf /opt/hostedtoolcache/node
+          sudo docker image prune --all --force
+          sudo apt-get clean
+          df -h
+
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set lowercase repository name
+        id: set_repo
+        run: echo "REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push GPU image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.gpu
+          push: true
+          tags: |
+            ghcr.io/${{ steps.set_repo.outputs.REPO_NAME }}:latest
+            ghcr.io/${{ steps.set_repo.outputs.REPO_NAME }}:gpu
+            ghcr.io/${{ steps.set_repo.outputs.REPO_NAME }}:gpu-v11
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output Image URL
+        run: |
+          echo "GPU Image pushed to: ghcr.io/${{ steps.set_repo.outputs.REPO_NAME }}:latest"
+          echo "GPU Image pushed to: ghcr.io/${{ steps.set_repo.outputs.REPO_NAME }}:gpu"

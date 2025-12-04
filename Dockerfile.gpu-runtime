@@ -1,0 +1,155 @@
+# syntax=docker/dockerfile:1.4
+# Monero RandomX zkVM Verification - GPU Runtime Build
+#
+# This image contains all dependencies but builds at RUNTIME on the GPU node.
+# This ensures libcuda.so is available during compilation.
+#
+# Build: docker build -f Dockerfile.gpu-runtime -t randomx-zkvm-gpu-runtime .
+# Run:   docker run --gpus all randomx-zkvm-gpu-runtime
+
+# CUDA 12.x base with Ubuntu 22.04
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    cmake \
+    gcc \
+    g++ \
+    libssl-dev \
+    pkg-config \
+    curl \
+    git \
+    build-essential \
+    ca-certificates \
+    protobuf-compiler \
+    libclang-dev \
+    clang \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash zkvm
+USER zkvm
+WORKDIR /home/zkvm
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/home/zkvm/.cargo/bin:${PATH}"
+
+# Install Risc0 toolchain
+RUN curl -L https://risczero.com/install | bash
+ENV PATH="/home/zkvm/.risc0/bin:${PATH}"
+RUN /home/zkvm/.risc0/bin/rzup install
+
+# Set up environment to use Risc0's Rust toolchain
+ENV PATH="/home/zkvm/.risc0/toolchains/v1.91.1-rust-x86_64-unknown-linux-gnu/bin:/home/zkvm/.risc0/bin:/home/zkvm/.cargo/bin:${PATH}"
+
+# CUDA environment
+ENV PATH=/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+ENV CUDA_HOME=/usr/local/cuda
+
+# Copy project files (source code only, no pre-built binaries)
+COPY --chown=zkvm:zkvm . /home/zkvm/project
+WORKDIR /home/zkvm/project
+
+# Clean any existing build artifacts
+RUN rm -rf target
+
+# Runtime environment
+ENV RISC0_PROVER=local
+ENV RUST_LOG=info,risc0_zkvm=debug,risc0_circuit_rv32im=info,risc0_prover=debug
+ENV RUST_BACKTRACE=full
+
+# Create startup script that builds with CUDA then drops to shell
+COPY --chown=zkvm:zkvm <<EOF /home/zkvm/project/start.sh
+#!/bin/bash
+set -e
+
+echo "============================================================"
+echo "  MONERO RANDOMX ZKVM - GPU RUNTIME"
+echo "============================================================"
+echo ""
+
+# GPU diagnostics
+echo "=== GPU Detection ==="
+if nvidia-smi > /dev/null 2>&1; then
+    nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+else
+    echo "WARNING: No NVIDIA GPU detected!"
+    echo "This image requires --gpus all flag for GPU proving"
+fi
+echo ""
+
+# Check for libcuda.so
+echo "=== CUDA Libraries ==="
+if ldconfig -p | grep -q libcuda; then
+    echo "libcuda.so found"
+else
+    echo "WARNING: libcuda.so not found"
+fi
+echo ""
+
+# Build with CUDA if needed
+BINARY="/home/zkvm/project/target/release/host"
+if [ -f "\$BINARY" ]; then
+    if ldd "\$BINARY" | grep -q libcuda; then
+        echo "Binary ready with CUDA support"
+    else
+        echo "Binary lacks CUDA, rebuilding..."
+        rm -rf /home/zkvm/project/target
+        NEEDS_BUILD=1
+    fi
+else
+    NEEDS_BUILD=1
+fi
+
+if [ "\${NEEDS_BUILD:-0}" = "1" ] || [ ! -f "\$BINARY" ]; then
+    echo "=== Building with CUDA support ==="
+    echo "This will take 30-60 minutes..."
+    echo ""
+
+    cd /home/zkvm/project
+    RUSTFLAGS="-C target-cpu=native" cargo build -F cuda -r -p host 2>&1 | tee /tmp/build.log
+
+    if ldd "\$BINARY" | grep -q libcuda; then
+        echo "SUCCESS: CUDA build complete"
+    else
+        echo "FATAL: CUDA compilation failed"
+        exit 1
+    fi
+fi
+
+echo ""
+echo "============================================================"
+echo "  PROVER CLI READY"
+echo "============================================================"
+echo ""
+echo "Binary: /home/zkvm/project/target/release/host"
+echo ""
+echo "Usage: /home/zkvm/project/target/release/host [mode] [options]"
+echo ""
+echo "Modes:"
+echo "  cache               Prove full cache (64 segments)"
+echo "  cache-segment N     Prove single cache segment (0-63)"
+echo "  block               Prove full block PoW (8 programs)"
+echo "  block-segment N     Prove single block segment (0-255)"
+echo "  full                Prove cache + block (default)"
+echo ""
+echo "Examples:"
+echo "  /home/zkvm/project/target/release/host cache-segment 5"
+echo "  /home/zkvm/project/target/release/host block-segment 42"
+echo "  /home/zkvm/project/target/release/host --help"
+echo ""
+echo "============================================================"
+echo ""
+
+# Keep container running (for Akash shell access)
+tail -f /dev/null
+EOF
+RUN chmod +x /home/zkvm/project/start.sh
+
+# Start with shell (no auto-proving)
+CMD ["/bin/bash", "/home/zkvm/project/start.sh"]

@@ -1,0 +1,52 @@
+# Monero RandomX zkVM Verification - Docker Compose
+#
+# Usage:
+#   docker-compose build   # Build the image
+#   docker-compose up      # Run the benchmark
+#   docker-compose run --rm benchmark bash  # Interactive shell
+#
+# For development mode (faster, no real proofs):
+#   RISC0_DEV_MODE=1 docker-compose up
+
+version: "3.8"
+
+services:
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: randomx-zkvm-benchmark
+
+    # Resource limits - adjust based on your machine
+    # RandomX light mode needs 256MB, zkVM proving needs more
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 4G
+
+    # Environment variables
+    environment:
+      # Set to "1" for development mode (fast, no real proofs)
+      # Leave empty for production benchmarking (slow, real proofs)
+      - RISC0_DEV_MODE=${RISC0_DEV_MODE:-}
+      # Number of threads for proving
+      - RAYON_NUM_THREADS=${RAYON_NUM_THREADS:-}
+      # Rust log level
+      - RUST_LOG=${RUST_LOG:-info}
+
+    # Mount for caching (optional, speeds up rebuilds)
+    volumes:
+      - cargo-cache:/home/zkvm/.cargo/registry
+      - target-cache:/home/zkvm/project/target
+
+    # Increase shared memory for parallel operations
+    shm_size: 2gb
+
+    # Allow enough time for proving
+    stop_grace_period: 5m
+
+volumes:
+  cargo-cache:
+  target-cache:
