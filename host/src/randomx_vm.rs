@@ -268,6 +268,31 @@ impl Program {
 
         Self { instructions, entropy }
     }
+
+    /// Generate raw program bytes for passing to guest
+    /// Returns (instruction_bytes, entropy) where instruction_bytes is 256 * 8 = 2048 bytes
+    pub fn generate_raw(seed: &[u8; 64]) -> (Vec<u8>, [u64; 16]) {
+        let mut gen = AesGenerator::new(seed);
+
+        // Generate entropy first (128 bytes = 16 x u64)
+        let mut entropy = [0u64; 16];
+        for e in entropy.iter_mut() {
+            let block = gen.next_block();
+            *e = u64::from_le_bytes([
+                block[0], block[1], block[2], block[3],
+                block[4], block[5], block[6], block[7],
+            ]);
+        }
+
+        // Generate instruction bytes (256 x 8 bytes = 2048 bytes)
+        let mut instruction_bytes = Vec::with_capacity(RANDOMX_PROGRAM_SIZE * 8);
+        for _ in 0..RANDOMX_PROGRAM_SIZE {
+            let block = gen.next_block();
+            instruction_bytes.extend_from_slice(&block[0..8]);
+        }
+
+        (instruction_bytes, entropy)
+    }
 }
 
 // ============================================================

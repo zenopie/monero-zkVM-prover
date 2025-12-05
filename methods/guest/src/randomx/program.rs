@@ -124,6 +124,51 @@ impl Program {
         }
         result
     }
+
+    /// Create program from pre-computed instruction bytes and entropy
+    /// instruction_bytes: 256 instructions × 8 bytes = 2048 bytes
+    /// entropy: 16 × u64 values
+    pub fn from_bytes(instruction_bytes: &[u8], entropy: [u64; 16]) -> Self {
+        assert!(instruction_bytes.len() >= RANDOMX_PROGRAM_SIZE * 8, "Not enough instruction bytes");
+
+        let mut instructions: [Instruction; RANDOMX_PROGRAM_SIZE] =
+            core::array::from_fn(|_| Instruction::nop());
+
+        let mut branch_count = 0;
+
+        for i in 0..RANDOMX_PROGRAM_SIZE {
+            let offset = i * 8;
+            let mut instr = Instruction::from_bytes(&[
+                instruction_bytes[offset],
+                instruction_bytes[offset + 1],
+                instruction_bytes[offset + 2],
+                instruction_bytes[offset + 3],
+                instruction_bytes[offset + 4],
+                instruction_bytes[offset + 5],
+                instruction_bytes[offset + 6],
+                instruction_bytes[offset + 7],
+            ]);
+
+            // Handle CBRANCH target calculation (same as generate)
+            if instr.opcode == Opcode::CBRANCH {
+                let target_offset = (instr.mod_val as i32) - 128;
+                let target = (i as i32 + target_offset).max(0) as i32;
+                instr.target = target.min(i as i32) as i32;
+                branch_count += 1;
+
+                if branch_count > 8 {
+                    instr.opcode = Opcode::NOP;
+                }
+            }
+
+            instructions[i] = instr;
+        }
+
+        Self {
+            instructions,
+            entropy,
+        }
+    }
 }
 
 /// Superscalar program for dataset generation

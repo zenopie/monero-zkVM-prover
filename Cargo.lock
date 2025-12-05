@@ -1865,6 +1865,7 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "serde-big-array",
+ "sha2",
  "sysinfo",
 ]
 

@@ -429,7 +429,6 @@ pub struct ProgramSegmentInput {
     pub iteration_start: u16,
     /// Number of iterations to execute (2048 for full, 64 for chunked)
     pub iteration_count: u16,
-    pub randomx_key: [u8; 32],
     pub dataset_merkle_root: [u8; 32],
     pub input_data: Vec<u8>,
     #[serde(with = "BigArray")]
@@ -444,6 +443,11 @@ pub struct ProgramSegmentInput {
     pub initial_mx: u32,
     pub dataset_items: Vec<DatasetItemEntry>,
     pub difficulty: u64,
+    /// Pre-computed program instructions (256 × 8 bytes)
+    pub program_instructions: Vec<u8>,
+    /// Pre-computed program entropy (16 × u64)
+    #[serde(with = "BigArray")]
+    pub program_entropy: [u64; 16],
 }
 
 /// Dataset item with Merkle proof
@@ -464,9 +468,6 @@ pub struct ProgramSegmentOutput {
     pub iteration_count: u16,
     #[serde(with = "BigArray")]
     pub next_seed: [u8; 64],
-    pub scratchpad_hash: [u8; 32],
-    /// Hash of output registers (for chaining chunks within a program)
-    pub register_hash: [u8; 32],
     pub pow_hash: Option<[u8; 32]>,
     pub difficulty_valid: Option<bool>,
     pub dataset_merkle_root: [u8; 32],
@@ -1417,22 +1418,26 @@ fn main() {
         // is_last only if program 7 AND this chunk ends at iteration 2048
         let is_last = prog_idx == PROGRAM_COUNT - 1 && (iteration_start + iteration_count) == ITERATIONS;
 
+        // Generate program data on host
+        let (program_instructions, program_entropy) = host::randomx_vm::Program::generate_raw(&simulation.seeds[prog_idx]);
+
         let segment_input = ProgramSegmentInput {
             program_index: prog_idx as u8,
             is_first,
             is_last,
             iteration_start: iteration_start as u16,
             iteration_count: iteration_count as u16,
-            randomx_key,
             dataset_merkle_root: merkle_root,
             input_data: if is_first { header.hashing_blob.clone() } else { vec![] },
             seed: simulation.seeds[prog_idx],
-            scratchpad: chunk_sim.scratchpad_at_start.clone(),  // Use scratchpad at iteration_start, not program start
+            scratchpad: chunk_sim.scratchpad_at_start.clone(),
             initial_registers: chunk_sim.initial_registers.clone(),
             initial_ma: chunk_sim.initial_ma,
             initial_mx: chunk_sim.initial_mx,
             dataset_items,
             difficulty,
+            program_instructions,
+            program_entropy,
         };
 
         let input_size = std::mem::size_of_val(&segment_input);
@@ -1465,8 +1470,6 @@ fn main() {
 
                 log(&format!("Segment {} PROVED in {}", seg_id, format_duration(seg_time.as_secs())));
                 log(&format!("Cycles: {}", format_number(phase2_cycles)));
-                log(&format!("Scratchpad hash: 0x{}...", hex::encode(&output.scratchpad_hash[..8])));
-                log(&format!("Register hash: 0x{}...", hex::encode(&output.register_hash[..8])));
 
                 // Verify segment proof
                 match info.receipt.verify(PHASE2_PROGRAM_ID) {
@@ -1617,22 +1620,26 @@ fn main() {
             dataset_items.iter().map(|e| 8 + 64 + e.proof.len()).sum::<usize>();
         log(&format!("    Input size: {:.2} MiB", input_size as f64 / 1_048_576.0));
 
+        // Generate program data on host
+        let (program_instructions, program_entropy) = host::randomx_vm::Program::generate_raw(&current_seed);
+
         let segment_input = ProgramSegmentInput {
             program_index: prog_idx as u8,
             is_first,
             is_last,
             iteration_start: 0,
             iteration_count: ITERATIONS as u16,
-            randomx_key,
             dataset_merkle_root: merkle_root,
             input_data: if is_first { header.hashing_blob.clone() } else { vec![] },
             seed: current_seed,
             scratchpad: current_scratchpad.to_vec(),
-            initial_registers: vec![],  // Empty for iteration_start=0
-            initial_ma: 0,  // Not needed for iteration_start=0
-            initial_mx: 0,  // Not needed for iteration_start=0
+            initial_registers: vec![],
+            initial_ma: 0,
+            initial_mx: 0,
             dataset_items,
             difficulty,
+            program_instructions,
+            program_entropy,
         };
 
         let seg_env = ExecutorEnv::builder()

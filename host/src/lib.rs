@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use blake2::{Blake2b512, Digest};
+use sha2::Sha256;
 
 /// Library version
 pub const VERSION: &str = "v29";
@@ -303,7 +304,6 @@ pub struct ProgramSegmentInput {
     pub is_last: bool,
     pub iteration_start: u16,
     pub iteration_count: u16,
-    pub randomx_key: [u8; 32],
     pub dataset_merkle_root: [u8; 32],
     pub input_data: Vec<u8>,
     #[serde(with = "BigArray")]
@@ -314,6 +314,11 @@ pub struct ProgramSegmentInput {
     pub initial_mx: u32,
     pub dataset_items: Vec<DatasetItemEntry>,
     pub difficulty: u64,
+    /// Pre-computed program instructions (256 × 8 bytes)
+    pub program_instructions: Vec<u8>,
+    /// Pre-computed program entropy (16 × u64)
+    #[serde(with = "BigArray")]
+    pub program_entropy: [u64; 16],
 }
 
 /// Dataset item with Merkle proof
@@ -333,8 +338,6 @@ pub struct ProgramSegmentOutput {
     pub iteration_count: u16,
     #[serde(with = "BigArray")]
     pub next_seed: [u8; 64],
-    pub scratchpad_hash: [u8; 32],
-    pub register_hash: [u8; 32],
     pub pow_hash: Option<[u8; 32]>,
     pub difficulty_valid: Option<bool>,
     pub dataset_merkle_root: [u8; 32],
@@ -492,6 +495,14 @@ pub fn blake2b_256(data: &[u8]) -> [u8; 32] {
     let mut hash = [0u8; 32];
     hash.copy_from_slice(&full[..32]);
     hash
+}
+
+/// Compute SHA-256 hash (used for Merkle tree - accelerated in zkVM)
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    use sha2::Digest as Sha2Digest;
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
 }
 
 /// Compute Argon2d seed
@@ -681,17 +692,19 @@ fn extract_segment_boundaries(
     boundaries
 }
 
-/// Build Merkle tree from cache
+/// Build Merkle tree from cache using SHA-256 (accelerated in zkVM)
 pub fn build_merkle_tree(cache: &[u8]) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
     let num_items = cache.len() / 64;
 
+    // Hash each 64-byte item with SHA-256 to get leaves
     let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(num_items);
     for i in 0..num_items {
         let start = i * 64;
         let item = &cache[start..start + 64];
-        leaves.push(blake2b_256(item));
+        leaves.push(sha256(item));
     }
 
+    // Pad to power of 2
     let mut size = 1;
     while size < leaves.len() {
         size *= 2;
@@ -702,6 +715,7 @@ pub fn build_merkle_tree(cache: &[u8]) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
 
     let mut tree: Vec<Vec<[u8; 32]>> = vec![leaves];
 
+    // Build tree levels using SHA-256
     while tree.last().unwrap().len() > 1 {
         let prev_level = tree.last().unwrap();
         let mut next_level = Vec::with_capacity(prev_level.len() / 2);
@@ -710,7 +724,7 @@ pub fn build_merkle_tree(cache: &[u8]) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
             let mut combined = [0u8; 64];
             combined[0..32].copy_from_slice(&prev_level[i]);
             combined[32..64].copy_from_slice(&prev_level[i + 1]);
-            next_level.push(blake2b_256(&combined));
+            next_level.push(sha256(&combined));
         }
         tree.push(next_level);
     }
@@ -1001,13 +1015,15 @@ pub fn prove_block(config: &ProverConfig) -> ProofResult {
             });
         }
 
+        // Generate program data on host for the current seed
+        let (program_instructions, program_entropy) = randomx_vm::Program::generate_raw(&current_seed);
+
         let segment_input = ProgramSegmentInput {
             program_index: prog_idx as u8,
             is_first,
             is_last,
             iteration_start: 0,
             iteration_count: ITERATIONS as u16,
-            randomx_key: config.randomx_key,
             dataset_merkle_root: merkle_root,
             input_data: if is_first { config.hashing_blob.clone() } else { vec![] },
             seed: current_seed,
@@ -1017,6 +1033,8 @@ pub fn prove_block(config: &ProverConfig) -> ProofResult {
             initial_mx: 0,
             dataset_items,
             difficulty: config.difficulty,
+            program_instructions,
+            program_entropy,
         };
 
         let seg_env = ExecutorEnv::builder()
@@ -1117,22 +1135,26 @@ pub fn prove_block_segment(config: &ProverConfig, segment: usize) -> ProofResult
     let is_first = prog_idx == 0 && iteration_start == 0;
     let is_last = prog_idx == PROGRAM_COUNT - 1 && (iteration_start + iteration_count) == ITERATIONS;
 
+    // Generate program data on host
+    let (program_instructions, program_entropy) = randomx_vm::Program::generate_raw(&simulation.seeds[prog_idx]);
+
     let segment_input = ProgramSegmentInput {
         program_index: prog_idx as u8,
         is_first,
         is_last,
         iteration_start: iteration_start as u16,
         iteration_count: iteration_count as u16,
-        randomx_key: config.randomx_key,
         dataset_merkle_root: merkle_root,
         input_data: if is_first { config.hashing_blob.clone() } else { vec![] },
         seed: simulation.seeds[prog_idx],
-        scratchpad: chunk_sim.scratchpad_at_start.clone(),  // Use scratchpad at iteration_start
+        scratchpad: chunk_sim.scratchpad_at_start.clone(),
         initial_registers: chunk_sim.initial_registers.clone(),
         initial_ma: chunk_sim.initial_ma,
         initial_mx: chunk_sim.initial_mx,
         dataset_items,
         difficulty: config.difficulty,
+        program_instructions,
+        program_entropy,
     };
 
     let prover = default_prover();
@@ -1239,22 +1261,26 @@ pub fn prove_block_segment_cached(
     let is_first = prog_idx == 0 && iteration_start == 0;
     let is_last = prog_idx == PROGRAM_COUNT - 1 && (iteration_start + iteration_count) == ITERATIONS;
 
+    // Generate program data on host
+    let (program_instructions, program_entropy) = randomx_vm::Program::generate_raw(&simulation.seeds[prog_idx]);
+
     let segment_input = ProgramSegmentInput {
         program_index: prog_idx as u8,
         is_first,
         is_last,
         iteration_start: iteration_start as u16,
         iteration_count: iteration_count as u16,
-        randomx_key: prep.randomx_key,
         dataset_merkle_root: prep.merkle_root,
         input_data: if is_first { hashing_blob.to_vec() } else { vec![] },
         seed: simulation.seeds[prog_idx],
-        scratchpad: chunk_sim.scratchpad_at_start.clone(),  // Use scratchpad at iteration_start
+        scratchpad: chunk_sim.scratchpad_at_start.clone(),
         initial_registers: chunk_sim.initial_registers.clone(),
         initial_ma: chunk_sim.initial_ma,
         initial_mx: chunk_sim.initial_mx,
         dataset_items,
         difficulty,
+        program_instructions,
+        program_entropy,
     };
 
     let prover = default_prover();

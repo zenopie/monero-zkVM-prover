@@ -18,3 +18,4 @@ bincode = "1.3"
 # For host-side cache computation (must match guest implementation)
 argon2 = "0.5"
 blake2 = "0.10"
+sha2 = "0.10"
