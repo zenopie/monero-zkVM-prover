@@ -751,6 +751,51 @@ fn generate_merkle_proof(tree: &[Vec<[u8; 32]>], index: usize) -> Vec<u8> {
     proof
 }
 
+/// Verify a Merkle proof (host-side, for debugging)
+pub fn verify_merkle_proof_host(
+    root: &[u8; 32],
+    index: u64,
+    item: &[u8; 64],
+    siblings: &[u8],
+    total_items: u64,
+) -> bool {
+    let mut current = sha256(item);
+
+    let height = 64 - (total_items - 1).leading_zeros();
+    let expected_siblings = height as usize;
+
+    if siblings.len() != expected_siblings * 32 {
+        eprintln!("Proof length mismatch: got {} bytes, expected {} bytes ({} siblings)",
+            siblings.len(), expected_siblings * 32, expected_siblings);
+        return false;
+    }
+
+    let mut idx = index;
+    for i in 0..expected_siblings {
+        let sibling_start = i * 32;
+        let mut sibling = [0u8; 32];
+        sibling.copy_from_slice(&siblings[sibling_start..sibling_start + 32]);
+
+        let mut combined = [0u8; 64];
+        if idx % 2 == 0 {
+            combined[0..32].copy_from_slice(&current);
+            combined[32..64].copy_from_slice(&sibling);
+        } else {
+            combined[0..32].copy_from_slice(&sibling);
+            combined[32..64].copy_from_slice(&current);
+        }
+        current = sha256(&combined);
+        idx /= 2;
+    }
+
+    if current != *root {
+        eprintln!("Root mismatch: computed {:?}, expected {:?}",
+            hex::encode(&current[..8]), hex::encode(&root[..8]));
+        return false;
+    }
+    true
+}
+
 /// Convert segment ID to program parameters
 fn segment_to_params(segment_id: usize) -> (usize, usize, usize) {
     let program_index = segment_id / CHUNKS_PER_PROGRAM;
@@ -1251,6 +1296,14 @@ pub fn prove_block_segment_cached(
         let mut item = [0u8; 64];
         item.copy_from_slice(&prep.cache[item_start..item_start + 64]);
         let proof = generate_merkle_proof(&prep.merkle_tree, idx as usize);
+
+        // Verify proof before sending to guest (debug)
+        if !verify_merkle_proof_host(&prep.merkle_root, idx, &item, &proof, RANDOMX_DATASET_ITEM_COUNT as u64) {
+            eprintln!("ERROR: Host-side proof verification failed for item {}", idx);
+            eprintln!("  Tree levels: {}", prep.merkle_tree.len());
+            eprintln!("  Proof length: {} bytes ({} siblings)", proof.len(), proof.len() / 32);
+        }
+
         dataset_items.push(DatasetItemEntry {
             index: idx,
             item,

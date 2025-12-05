@@ -21,7 +21,7 @@ use guest::randomx::program::Program;
 use guest::randomx::vm::VmState;
 use guest::{RANDOMX_DATASET_ITEM_COUNT, SCRATCHPAD_SIZE, ITERATIONS};
 use risc0_zkvm::guest::env;
-use risc0_zkvm::sha::{Impl as Sha256Impl, Sha256};
+use sha2::{Sha256, Digest};
 use serde::{Deserialize, Serialize};
 
 /// Input to a single program segment
@@ -96,9 +96,11 @@ pub struct ProgramSegmentOutput {
     pub dataset_merkle_root: [u8; 32],
 }
 
-/// Compute SHA-256 hash using RISC0 accelerated implementation
+/// Compute SHA-256 hash using RISC0's patched sha2 crate (accelerated precompile)
 fn sha256(data: &[u8]) -> [u8; 32] {
-    (*Sha256Impl::hash_bytes(data)).into()
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
 }
 
 /// Verify a Merkle proof using accelerated SHA-256

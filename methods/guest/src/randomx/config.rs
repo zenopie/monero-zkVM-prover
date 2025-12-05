@@ -19,10 +19,12 @@ pub const RANDOMX_DATASET_BASE_SIZE: usize = 2147483648;
 /// Dataset extra size
 pub const RANDOMX_DATASET_EXTRA_SIZE: usize = 33554368;
 
-/// Number of dataset items
-pub const RANDOMX_DATASET_ITEM_COUNT: usize = 34078719;
 /// Cache size: 256 MiB
 pub const RANDOMX_CACHE_SIZE: usize = 268435456;
+/// Number of dataset items (light mode: cache_size / 64)
+/// Note: Full RandomX dataset mode uses 34078719 items (2 GiB dataset)
+/// But light mode (which we use) treats cache as dataset directly
+pub const RANDOMX_DATASET_ITEM_COUNT: usize = RANDOMX_CACHE_SIZE / 64;  // 4,194,304 items
 
 /// Program size in instructions
 pub const RANDOMX_PROGRAM_SIZE: usize = 256;
