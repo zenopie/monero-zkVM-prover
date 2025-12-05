@@ -3,11 +3,7 @@ version: "2.0"
 
 services:
   randomx-zkvm:
-<<<<<<< HEAD
-    image: ghcr.io/zenopie/zkvm-test:gpu-runtime-v32
-=======
     image: ghcr.io/zenopie/monero-zkvm-prover:gpu-runtime-v32
->>>>>>> dc59aa4 (v32: Add Python bindings, PrepCache, and segment proving fixes)
     env:
       - RISC0_PROVER=local
       - RUST_LOG=info,risc0_zkvm=debug,risc0_circuit_rv32im=info,risc0_prover=debug
