@@ -21,7 +21,7 @@ use blake2::{Blake2b512, Digest};
 use sha2::Sha256;
 
 /// Library version
-pub const VERSION: &str = "v29";
+pub const VERSION: &str = "v33";
 
 // ============================================================
 // MONERO RANDOMX SPECIFICATION
