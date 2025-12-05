@@ -8,6 +8,7 @@
 //!   block               Prove full block PoW (8 programs)
 //!   block-segment <N>   Prove single block segment (0-255)
 //!   full                Prove cache + block (default)
+//!   prep-cache          Build and save prep cache for fast segment proving
 //!
 //! Options:
 //!   --randomx-key <HEX>   32-byte RandomX key (hex, uses test key if omitted)
@@ -65,6 +66,7 @@ enum ProofMode {
     Block,                    // Prove full block PoW (8 programs)
     BlockSegment(usize),      // Prove single block segment (0-255)
     Full,                     // Both cache + block
+    PrepCache,                // Build and save prep cache for fast segment proving
 }
 
 /// Configuration parsed from command-line arguments
@@ -127,6 +129,7 @@ impl Config {
                     mode = ProofMode::BlockSegment(seg);
                 }
                 "full" => mode = ProofMode::Full,
+                "prep-cache" => mode = ProofMode::PrepCache,
                 "--randomx-key" => {
                     i += 1;
                     if i >= args.len() {
@@ -200,6 +203,7 @@ fn print_help() {
     println!("  block               Prove full block PoW (8 programs)");
     println!("  block-segment <N>   Prove single block segment (0-255)");
     println!("  full                Prove cache + block (default)");
+    println!("  prep-cache          Build and save prep cache (~10 mins, reusable for ~2048 blocks)");
     println!();
     println!("Options:");
     println!("  --randomx-key <HEX>   32-byte RandomX key (uses test key if omitted)");
@@ -213,6 +217,7 @@ fn print_help() {
     println!("  prover cache-segment 5                # Prove cache segment 5");
     println!("  prover block-segment 42               # Prove block segment 42");
     println!("  prover block --randomx-key abc123...  # Full block with real key");
+    println!("  prover prep-cache --randomx-key abc...# Build prep cache for fast proving");
 }
 
 /// Convert segment ID (0-255) to program index and iteration range
@@ -998,6 +1003,61 @@ fn main() {
         log("Prover Backend: CPU (set RISC0_PROVER=cuda or metal for GPU)");
     }
 
+    // =========================================================
+    // PREP CACHE MODE - build and save cache for fast segment proving
+    // =========================================================
+    if matches!(config.mode, ProofMode::PrepCache) {
+        log_separator();
+        println!("  PREP CACHE MODE");
+        log_separator();
+        println!();
+
+        let randomx_key = config.randomx_key.unwrap_or_else(get_test_randomx_key);
+        log(&format!("RandomX Key: 0x{}", hex::encode(&randomx_key)));
+
+        // Check if cache already exists
+        if let Some(existing) = host::PrepCache::load(&randomx_key) {
+            log("Cache already exists!");
+            log(&format!("Merkle root: 0x{}", hex::encode(&existing.merkle_root)));
+            log("To rebuild, delete the cache file in ./cache/");
+            return;
+        }
+
+        log("Building prep cache (this takes ~10 minutes)...");
+        log("  - Computing Argon2d seed");
+        log("  - Expanding to 256 MiB cache");
+        log("  - Building Merkle tree (~4.2M items)");
+        println!();
+
+        let start = Instant::now();
+        let prep = host::PrepCache::build(randomx_key);
+        let build_time = start.elapsed();
+
+        log(&format!("Cache built in {}", format_duration(build_time.as_secs())));
+        log(&format!("Merkle root: 0x{}", hex::encode(&prep.merkle_root)));
+
+        // Save to disk
+        log("Saving cache to disk...");
+        match prep.save() {
+            Ok(_) => {
+                log("Cache saved successfully!");
+                log(&format!("Location: ./cache/prep_{}....bin", hex::encode(&randomx_key[..8])));
+            }
+            Err(e) => {
+                log(&format!("ERROR: Failed to save cache: {}", e));
+                std::process::exit(1);
+            }
+        }
+
+        log_separator();
+        println!("  PREP CACHE COMPLETE!");
+        log_separator();
+        log("This cache is reusable for ~2048 blocks with the same RandomX key.");
+        log("Use with prove_segment() in Python for fast (<2 min) segment proving.");
+        log_separator();
+        return;
+    }
+
     let prover = default_prover();
     let opts = ProverOpts::default();
     let total_start = Instant::now();
@@ -1367,7 +1427,7 @@ fn main() {
             dataset_merkle_root: merkle_root,
             input_data: if is_first { header.hashing_blob.clone() } else { vec![] },
             seed: simulation.seeds[prog_idx],
-            scratchpad: simulation.scratchpads[prog_idx].clone(),
+            scratchpad: chunk_sim.scratchpad_at_start.clone(),  // Use scratchpad at iteration_start, not program start
             initial_registers: chunk_sim.initial_registers.clone(),
             initial_ma: chunk_sim.initial_ma,
             initial_mx: chunk_sim.initial_mx,

@@ -870,6 +870,9 @@ pub struct ChunkSimulationResult {
     pub initial_ma: u32,
     /// Initial mem_config.mx value - needed for mid-program chunks
     pub initial_mx: u32,
+    /// Scratchpad state at iteration_start (after warmup iterations)
+    /// This is different from input scratchpad for mid-program chunks
+    pub scratchpad_at_start: Vec<u8>,
     /// Final register state (256 bytes)
     pub final_registers: [u8; 256],
     /// Scratchpad at the end of this chunk
@@ -897,8 +900,8 @@ pub fn simulate_program_chunk(
     vm.init(seed, &program.entropy);
 
     // If this is a mid-program chunk, we need to run preceding iterations first
-    // to get the correct register and mem_config state
-    let (initial_registers, initial_ma, initial_mx) = if iteration_start > 0 {
+    // to get the correct register, mem_config, and scratchpad state
+    let (initial_registers, initial_ma, initial_mx, scratchpad_at_start) = if iteration_start > 0 {
         // Run iterations 0 to iteration_start to get the state
         for _iter in 0..iteration_start {
             vm.execute_program(&program);
@@ -929,10 +932,12 @@ pub fn simulate_program_chunk(
             vm.mem_config.mx ^= vm.int_regs[1] as u32;
         }
 
-        // Capture register state AND mem_config BEFORE running the target chunk
-        (vm.get_register_file().to_vec(), vm.mem_config.ma, vm.mem_config.mx)
+        // Capture register state, mem_config, AND scratchpad BEFORE running the target chunk
+        // The scratchpad has been modified by ISTORE operations during warmup
+        (vm.get_register_file().to_vec(), vm.mem_config.ma, vm.mem_config.mx, vm.scratchpad.clone())
     } else {
-        (vec![], 0, 0)
+        // For iteration_start=0, use the input scratchpad directly
+        (vec![], 0, 0, scratchpad.to_vec())
     };
 
     // Now run the target iteration range and collect accesses
@@ -976,6 +981,7 @@ pub fn simulate_program_chunk(
         initial_registers,
         initial_ma,
         initial_mx,
+        scratchpad_at_start,
         final_registers: vm.get_register_file(),
         final_scratchpad: vm.scratchpad,
     }

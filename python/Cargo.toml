@@ -1,0 +1,13 @@
+[package]
+name = "monero_zkvm_prover"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "monero_zkvm_prover"
+crate-type = ["cdylib"]
+
+[dependencies]
+host = { path = "../host" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+hex = { workspace = true }
