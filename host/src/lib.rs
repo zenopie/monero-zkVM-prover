@@ -21,7 +21,7 @@ use blake2::{Blake2b512, Digest};
 use sha2::Sha256;
 
 /// Library version
-pub const VERSION: &str = "v36";
+pub const VERSION: &str = "v37";
 
 // ============================================================
 // MONERO RANDOMX SPECIFICATION
@@ -333,14 +333,26 @@ pub struct DatasetItemEntry {
 /// Program segment output
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProgramSegmentOutput {
-    pub program_index: u8,
-    pub iteration_start: u16,
-    pub iteration_count: u16,
+    /// Segment ID (0-255): program_index * 32 + chunk_index
+    pub segment_id: u16,
+    /// The seed this segment started with
     #[serde(with = "BigArray")]
-    pub next_seed: [u8; 64],
-    pub pow_hash: Option<[u8; 32]>,
-    pub difficulty_valid: Option<bool>,
+    pub input_seed: [u8; 64],
+    /// The seed after execution (for chaining verification)
+    #[serde(with = "BigArray")]
+    pub output_seed: [u8; 64],
+    /// SHA256 hash of input scratchpad (2 MiB)
+    pub scratchpad_hash: [u8; 32],
+    /// SHA256 hash of program instructions
+    pub program_hash: [u8; 32],
+    /// For mid-program chunks: hash of initial state (registers + ma + mx)
+    pub initial_state_hash: [u8; 32],
+    /// Merkle root of dataset that was verified against
     pub dataset_merkle_root: [u8; 32],
+    /// For last segment only: the final PoW hash
+    pub pow_hash: Option<[u8; 32]>,
+    /// For last segment only: whether difficulty was met
+    pub difficulty_valid: Option<bool>,
 }
 
 // ============================================================

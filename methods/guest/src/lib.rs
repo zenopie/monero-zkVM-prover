@@ -16,7 +16,7 @@ pub mod randomx;
 ///   - Dockerfile.gpu-runtime (line ~74 and tag)
 ///   - deploy-akash-runtime.yaml (image tag)
 ///   - .github/workflows/docker-build-gpu-runtime.yml (tags)
-pub const VERSION: &str = "v36";
+pub const VERSION: &str = "v37";
 
 // ----------------- FULL MONERO SPEC -----------------
 // These are ALWAYS the full Monero spec values.
