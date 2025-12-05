@@ -76,24 +76,37 @@ pub struct DatasetItemEntry {
     pub proof: Vec<u8>,
 }
 
-/// Output from a program segment
+/// Output from a program segment - commits to all inputs for verifier
+///
+/// Security: For random segment sampling, the verifier needs to check:
+/// 1. segment_id matches the challenged segment
+/// 2. input_seed is in the prover's committed state tree
+/// 3. scratchpad_hash matches expected (derived from seed)
+/// 4. program_hash matches expected (derived from seed)
+/// 5. dataset_merkle_root matches the proven cache
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProgramSegmentOutput {
-    /// Program index that was executed
-    pub program_index: u8,
-    /// Iteration range that was executed
-    pub iteration_start: u16,
-    pub iteration_count: u16,
-    /// For end of program: the seed for the next program
-    /// For mid-program chunks: same as input seed
+    /// Segment ID (0-255): program_index * 32 + chunk_index
+    pub segment_id: u16,
+    /// The seed this segment started with (verifier checks this is in commitment)
     #[serde(with = "serde_big_array::BigArray")]
-    pub next_seed: [u8; 64],
-    /// For last iteration of last program only: the final PoW hash
-    pub pow_hash: Option<[u8; 32]>,
-    /// For last program only: whether difficulty was met
-    pub difficulty_valid: Option<bool>,
-    /// Merkle root that was verified against
+    pub input_seed: [u8; 64],
+    /// The seed after execution (for chaining verification)
+    #[serde(with = "serde_big_array::BigArray")]
+    pub output_seed: [u8; 64],
+    /// SHA256 hash of input scratchpad (2 MiB) - verifier checks derivation
+    pub scratchpad_hash: [u8; 32],
+    /// SHA256 hash of program instructions - verifier checks derivation from seed
+    pub program_hash: [u8; 32],
+    /// For mid-program chunks: hash of initial state (registers + ma + mx)
+    /// For iteration_start=0: all zeros
+    pub initial_state_hash: [u8; 32],
+    /// Merkle root of dataset that was verified against
     pub dataset_merkle_root: [u8; 32],
+    /// For last segment only: the final PoW hash
+    pub pow_hash: Option<[u8; 32]>,
+    /// For last segment only: whether difficulty was met
+    pub difficulty_valid: Option<bool>,
 }
 
 /// Compute SHA-256 hash using RISC0's patched sha2 crate (accelerated precompile)
@@ -187,6 +200,11 @@ impl VerifiedDataset {
     }
 }
 
+/// Number of iterations per chunk (64 iterations = 32 chunks per program)
+const CHUNK_SIZE: usize = 64;
+/// Number of chunks per program
+const CHUNKS_PER_PROGRAM: usize = ITERATIONS / CHUNK_SIZE;
+
 risc0_zkvm::guest::entry!(main);
 
 fn main() {
@@ -200,6 +218,27 @@ fn main() {
         (input.iteration_start as usize) + (input.iteration_count as usize) <= ITERATIONS,
         "Iteration range exceeds program length"
     );
+
+    // Compute segment_id from program_index and iteration_start
+    let chunk_index = (input.iteration_start as usize) / CHUNK_SIZE;
+    let segment_id = (input.program_index as u16) * (CHUNKS_PER_PROGRAM as u16) + (chunk_index as u16);
+
+    // Compute commitment hashes for security
+    // These allow verifier to check inputs were derived correctly
+    let scratchpad_hash = sha256(&input.scratchpad);
+    let program_hash = sha256(&input.program_instructions);
+
+    // For mid-program chunks, hash the initial state
+    let initial_state_hash = if input.iteration_start == 0 {
+        [0u8; 32] // First chunk - no initial state from previous chunk
+    } else {
+        // Hash: initial_registers (256) + initial_ma (4) + initial_mx (4) = 264 bytes
+        let mut state_data = [0u8; 264];
+        state_data[0..256].copy_from_slice(&input.initial_registers);
+        state_data[256..260].copy_from_slice(&input.initial_ma.to_le_bytes());
+        state_data[260..264].copy_from_slice(&input.initial_mx.to_le_bytes());
+        sha256(&state_data)
+    };
 
     // Build verified dataset from provided items with proofs
     let dataset = VerifiedDataset::new(
@@ -260,9 +299,9 @@ fn main() {
 
     let final_regs = vm.get_register_file();
 
-    // Compute next seed only if we finished the entire program (iteration_end == 2048)
+    // Compute output seed only if we finished the entire program (iteration_end == 2048)
     let is_program_complete = iteration_end == ITERATIONS;
-    let next_seed = if is_program_complete {
+    let output_seed = if is_program_complete {
         aes_hash_register_file(&final_regs)
     } else {
         input.seed  // Same seed continues within a program
@@ -289,15 +328,17 @@ fn main() {
         (None, None)
     };
 
-    // Commit output
+    // Commit output with all security-relevant fields
     let output = ProgramSegmentOutput {
-        program_index: input.program_index,
-        iteration_start: input.iteration_start,
-        iteration_count: input.iteration_count,
-        next_seed,
+        segment_id,
+        input_seed: input.seed,
+        output_seed,
+        scratchpad_hash,
+        program_hash,
+        initial_state_hash,
+        dataset_merkle_root: input.dataset_merkle_root,
         pow_hash,
         difficulty_valid,
-        dataset_merkle_root: input.dataset_merkle_root,
     };
 
     env::commit(&output);
