@@ -3,7 +3,7 @@ version: "2.0"
 
 services:
   randomx-zkvm:
-    image: ghcr.io/zenopie/monero-zkvm-prover:gpu-runtime-v35
+    image: ghcr.io/zenopie/monero-zkvm-prover:gpu-runtime-v36
     env:
       - RISC0_PROVER=local
       - RUST_LOG=info,risc0_zkvm=debug,risc0_circuit_rv32im=info,risc0_prover=debug
