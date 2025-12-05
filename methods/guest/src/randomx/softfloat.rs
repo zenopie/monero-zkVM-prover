@@ -1,10 +1,10 @@
-//! Soft-float wrapper using the `softfloat` crate (koute)
+//! Soft-float wrapper using native Rust f64
 //!
-//! Uses the battle-tested softfloat crate for deterministic IEEE 754 operations.
+//! Uses native Rust f64 which compiles to LLVM's soft-float on rv32im.
+//! This is deterministic and IEEE 754 compliant.
 //! Currently uses round-to-nearest-even for all operations (rounding modes ignored).
-//! This ensures deterministic execution in zkVM while we verify the approach works.
 
-use softfloat::F64;
+use libm;
 
 /// Rounding modes (IEEE 754) - matches RandomX CFROUND instruction
 /// NOTE: Currently ignored - all ops use round-to-nearest-even
@@ -33,10 +33,10 @@ impl From<u8> for RoundingMode {
     }
 }
 
-/// Soft-float double precision number wrapper
+/// Soft-float double precision number wrapper using native f64
 #[derive(Clone, Copy, Debug)]
 pub struct SoftFloat {
-    inner: F64,
+    inner: f64,
 }
 
 impl SoftFloat {
@@ -44,7 +44,7 @@ impl SoftFloat {
     #[inline]
     pub fn from_bits(bits: u64) -> Self {
         Self {
-            inner: F64::from_bits(bits),
+            inner: f64::from_bits(bits),
         }
     }
 
@@ -57,17 +57,14 @@ impl SoftFloat {
     /// Create zero
     #[inline]
     pub fn zero() -> Self {
-        Self {
-            inner: F64::from_bits(0),
-        }
+        Self { inner: 0.0 }
     }
 
     /// Absolute value (clear sign bit)
     #[inline]
     pub fn abs(self) -> Self {
-        // IEEE 754: sign bit is bit 63, clear it for absolute value
         Self {
-            inner: F64::from_bits(self.inner.to_bits() & 0x7FFF_FFFF_FFFF_FFFF),
+            inner: libm::fabs(self.inner),
         }
     }
 
@@ -107,7 +104,7 @@ impl SoftFloat {
     #[inline]
     pub fn sqrt(self, _rm: RoundingMode) -> Self {
         Self {
-            inner: self.inner.sqrt(),
+            inner: libm::sqrt(self.inner),
         }
     }
 }

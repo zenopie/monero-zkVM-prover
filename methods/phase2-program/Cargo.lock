@@ -600,9 +600,9 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "blake2",
+ "libm",
  "risc0-zkvm",
  "serde",
- "softfloat",
 ]
 
 [[package]]
@@ -1255,12 +1255,6 @@ dependencies = [
  "cpufeatures",
  "digest",
 ]
-
-[[package]]
-name = "softfloat"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "359a2aa2309eed307acc397678f7fbb43989db6ee417a11752248fc98451e696"
 
 [[package]]
 name = "spin"

@@ -24,9 +24,9 @@ blake2 = { version = "0.10", default-features = false }
 # Argon2d for cache initialization (required for real Monero verification)
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 
-# Pure software IEEE 754 floating point - deterministic across all platforms
-# Uses round-to-nearest-even only (rounding modes ignored for now)
-softfloat = { version = "1", default-features = false }
+# Pure Rust math library for sqrt/fabs - uses LLVM's soft-float on rv32im
+# More optimized than external softfloat crate
+libm = "0.2"
 
 # NOTE: We implement AES ourselves in randomx/aes.rs
 # The aes crate requires std or has SIMD dependencies
