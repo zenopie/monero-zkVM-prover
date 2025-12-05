@@ -39,9 +39,10 @@ use sysinfo::System;
 // Import argon2 for host-side cache computation
 use argon2::{Algorithm, Argon2, Params, Version};
 use blake2::{Blake2b512, Digest};
+use sha2::Sha256;
 
 /// Version - keep in sync with methods/guest/src/lib.rs
-const VERSION: &str = "v33";
+const VERSION: &str = "v36";
 
 // ============================================================
 // MONERO RANDOMX SPECIFICATION (must match guest)
@@ -883,17 +884,26 @@ fn extract_segment_boundaries(
 // MERKLE TREE UTILITIES
 // ============================================================
 
+/// Compute SHA-256 hash (must match guest's accelerated SHA-256)
+fn sha256(data: &[u8]) -> [u8; 32] {
+    use sha2::Digest as Sha2Digest;
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}
+
 /// Build Merkle tree from dataset items (64-byte items from cache)
 /// Returns the root hash and the full tree (for proof generation)
+/// Uses SHA-256 to match guest verification (accelerated in zkVM)
 fn build_merkle_tree(cache: &[u8]) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
     let num_items = cache.len() / 64;
 
-    // Hash each 64-byte item to get leaf nodes
+    // Hash each 64-byte item to get leaf nodes (SHA-256 to match guest)
     let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(num_items);
     for i in 0..num_items {
         let start = i * 64;
         let item = &cache[start..start + 64];
-        leaves.push(blake2b_256(item));
+        leaves.push(sha256(item));
     }
 
     // Pad to power of 2
@@ -916,7 +926,7 @@ fn build_merkle_tree(cache: &[u8]) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
             let mut combined = [0u8; 64];
             combined[0..32].copy_from_slice(&prev_level[i]);
             combined[32..64].copy_from_slice(&prev_level[i + 1]);
-            next_level.push(blake2b_256(&combined));
+            next_level.push(sha256(&combined));
         }
         tree.push(next_level);
     }
